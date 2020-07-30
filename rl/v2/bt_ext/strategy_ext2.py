@@ -35,41 +35,80 @@ class RLCommonStrategy(bt.Strategy):
         self.date = None
         self.last_date = None
 
-        self.current_value = 0.0
-        self.reward = 0.0
-        self.discount = 1.0
-        self.done = False
-        self.last_observation = []
-        self.current_observation = []
-        self.next_observation = None
+        self._observation = []
+        self._episode_ended = False
 
-        # self.agent = self.env.getagent()
-        self.episode_return = 0.0
-        self.total_return = 0.0
+        self.last_action = None
+        self.action = None
+        self.last_observation = None
+        self.observation = None
+        self.done = False
+
+        self.reward = 0.0
+        self.agent = None
+        self.actor_net = None
+        self.replay_buffer = None
         self.learning_rate = 1e-3
         self.train_step_counter = tf.compat.v2.Variable(0)
-        self.actor_net = None
-        self.agent = None
-        self.replay_buffer = None
-        self.time_step_spec = None
-        self.action_step_spec = None
-        self.last_time_step_spec = None
-        self.last_action_step_spec = None
 
         self.feature_columns = []
         feature_columns = self.datas[0].columns[1:-1]
         for feature in feature_columns:
             self.feature_columns.append(getattr(self.datas[0], feature.lower()))
-        self.action_spec = array_spec.BoundedArraySpec(shape=(), dtype=np.int32, minimum=0, maximum=2, name='action')
-        self.observation_spec = array_spec.ArraySpec(shape=(len(feature_columns),), dtype=np.float, name='observation')
 
-        self.action_spec = tensor_spec.from_spec(self.action_spec)
-        self.observation_spec = tensor_spec.from_spec(self.observation_spec)
+        self._action_spec = array_spec.BoundedArraySpec(shape=(), dtype=np.int32, minimum=0, maximum=2, name='action')
+        self._observation_spec = array_spec.ArraySpec(shape=(len(feature_columns),), dtype=np.float, name='observation')
+        self._action_spec = tensor_spec.from_spec(self._action_spec)
+        self._observation = tensor_spec.from_spec(self._observation_spec)
+
+        batch_size = 32
+        replay_buffer_capacity = 100
+        optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate)
+
+        self.actor_net = actor_distribution_network.ActorDistributionNetwork(
+            self.observation_spec(),
+            self.action_spec()
+        )
+
+        self.agent = reinforce_agent.ReinforceAgent(
+            self.time_step_spec(),
+            self.action_spec(),
+            actor_network=self.actor_net,
+            optimizer=optimizer,
+            normalize_returns=True,
+            train_step_counter=self.train_step_counter
+        )
+
+        self.agent.initialize()
+        self.agent.train = common.function(self.agent.train)
+        self.log("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", doprint=True)
+        self.log(self.agent.collect_data_spec, doprint=True)
+        self.replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
+            data_spec=self.agent.collect_data_spec,
+            batch_size=batch_size,
+            max_length=replay_buffer_capacity
+        )
+
+        self._current_time_step = None
+        self._last_time_step = None
+        self._next_time_step = None
+        self._action_step = None
+        self._last_action_step = None
+        self._next_action_step = None
+
+    def action_spec(self):
+        return self._action_spec
+
+    def observation_spec(self):
+        return self._observation_spec
+
+    def time_step_spec(self):
+        return ts.time_step_spec(self.observation_spec())
 
     def start(self):
         self.log("start -> info", doprint=True)
         self.last_date = self.datas[0].datetime.date(0).strftime("%Y-%m-%d")
-        self.episode_return = 0
+        self.agent.train_step_counter.assign(0)
 
     def prenext_open(self):
         self.log("prenext_open -> info", doprint=True)
@@ -85,14 +124,13 @@ class RLCommonStrategy(bt.Strategy):
 
     def stop(self):
         self.log("stop -> info", doprint=True)
-        self.time_step_spec = ts.termination(np.array(self.current_observation, dtype=np.float), self.reward)
-        self.episode_counter += 1
-        experience = self.replay_buffer.gather_all()
-        train_loss = self.tf_agent.train(experience)
-        self.replay_buffer.clear()
+        self._episode_ended = False
+        ts.termination(np.array(self._observation, dtype=np.float), self.reward)
 
-        step = self.agent.train_step_counter.numpy()
-        print('step = {0}: loss = {1}'.format(step, train_loss.loss))
+        experience = self.replay_buffer.gather_all()
+        train_loss = self.agent.train(experience)
+        self.replay_buffer.clear()
+        self.log("stop -> loss = {1}".format(train_loss.loss), doprint=True)
 
     def notify_order(self, order):
         self.log("notify_order " + str(order.status), doprint=False)
@@ -135,7 +173,7 @@ class RLCommonStrategy(bt.Strategy):
     def _get_observation(self, date):
         obv = []
         done = False
-        self.log("_get_obv", doprint=True)
+        self.log("_get_observation -> ", doprint=True)
 
         for line in self.feature_columns:
             obv.append(line[0])
@@ -143,7 +181,11 @@ class RLCommonStrategy(bt.Strategy):
         if date == self.last_date:
             done = True
 
+        obv = np.array(obv, dtype=np.float)
         return obv, done
+
+    def get_current_time_step(self):
+        return self._current_time_step
 
     # As bt_ext.render(), but need to get observation and reward
     def next(self):
@@ -162,62 +204,19 @@ class RLCommonStrategy(bt.Strategy):
             return
         elif self.time_step == self.min_time_step:
             self.time_step = self.time_step + 1
-            self.current_observation, self.done = self._get_observation(date=self.date)
-            self.time_step_spec = ts.restart(np.array(self.current_observation, dtype=np.float))
-
-            self.log("next -> Last time step", doprint=True)
-            self.log(self.time_step_spec, doprint=True)
-            self.log(self.observation_spec, doprint=True)
-            self.log(self.action_spec, doprint=True)
-
-            self.log(type(self.observation_spec), doprint=True)
-            self.log(type(self.action_spec), doprint=True)
-
-            fc_layer_params = (100,)
-            batch_size = 32
-            replay_buffer_capacity = 100
-
-            optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=self.learning_rate)
-
-            self.actor_net = actor_distribution_network.ActorDistributionNetwork(
-                self.observation_spec,
-                self.action_spec,
-                fc_layer_params=fc_layer_params)
-
-            self.agent = reinforce_agent.ReinforceAgent(self.time_step_spec,
-                                                        self.action_spec,
-                                                        actor_network=self.actor_net,
-                                                        optimizer=optimizer,
-                                                        normalize_returns=True,
-                                                        train_step_counter=self.train_step_counter)
-
-            self.agent.initialize()
-            self.agent.train = common.function(self.agent.train)
-            self.log("!!!!!!!!!!!!!!!!!!!!!!!!!!", doprint=True)
-            self.log(self.agent.collect_data_spec, doprint=True)
-            self.replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
-                data_spec=self.agent.collect_data_spec,
-                batch_size=batch_size,
-                max_length=replay_buffer_capacity)
-
+            self.observation, self.done = self._get_observation(self.date)
+            self.log("next -> last time step", doprint=True)
             return
 
-        # print("date in next()")
-        # print(self.date)
+        self._last_time_step = self._current_time_step
+        self._last_action_step = self._action_step
 
-        # Fetch observation, do the rest thing first which should be done in step function
-        self.last_observation = self.current_observation
-        self.last_time_step_spec = self.time_step_spec
-        self.last_action_step_spec = self.action_step_spec
+        # TODO: complete for self_current_step values
+        self._current_time_step = ()
 
-        self.current_value = round(self.broker.getvalue(), 2)
-        self.current_observation, self.done = self._get_observation(date=self.date)
-        self.reward = self._get_reward()
-
-        self.log("next -> last obv", doprint=True)
-        self.log(self.last_observation, doprint=True)
-        self.log("next -> curr obv", doprint=True)
-        self.log(self.current_observation, doprint=True)
+        if self._last_action_step is not None and self._current_time_step is not None and self._last_time_step is not None:
+            traj = trajectory.from_transition(self._last_time_step, self._last_action_step, self._current_time_step)
+            self.replay_buffer.add_batch(traj)
 
         if self.done:
             self.time_step_spec = ts.termination(np.array(self.current_observation, dtype=np.float), self.reward)
@@ -237,6 +236,7 @@ class RLCommonStrategy(bt.Strategy):
 
         # self.action = self.agent.choose_action(self.current_observation)
         # self.action = 0
+
         self.action_step_spec = self.agent.collect_policy.action(self.time_step_spec)
 
         if self.action_step_spec.action == 0:
@@ -244,7 +244,6 @@ class RLCommonStrategy(bt.Strategy):
         elif self.action_step_spec.action == 1:
             # BUY, BUY, BUY!!! (with all possible default parameters)
             self.log("BUY CREATE, %.2f" % self.dataclose[0], doprint=False)
-
             # Keep track of the created order to avoid a 2nd order
             self.order = self.buy()
 
@@ -252,6 +251,5 @@ class RLCommonStrategy(bt.Strategy):
             # We must in the market before we can sell
             # SELL, SELL, SELL!!! (with all possible default parameters)
             self.log("SELL CREATE, %.2f" % self.dataclose[0], doprint=False)
-
             # Keep track of the created order to avoid a 2nd order
             self.order = self.sell()

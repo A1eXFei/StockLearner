@@ -1,13 +1,16 @@
 import random
 from os.path import join
 
-from feed.bt_data import BTCSVBasicData
-from rl.v2.agents.dqn import DQNAgent
+from feed.bt_data import *
 from rl.v2.bt_ext.cerebro_ext import RLCerebro
-from rl.v2.bt_ext.strategy_ext import RLCommonStrategy
+from rl.v2.bt_ext.sizer_ext import PercentSizer
+from rl.v2.bt_ext.strategy_ext2 import RLCommonStrategy
 
 data_path = "./test_data/stock/basic"
 data_files = "./test_data/stock/basic/000002.csv"
+scaled_data_path = "./test_data/stock/basic"
+scaled_data_files = "./test_data/stock/tech/000002_s.csv"
+data_schema = "./config_file/schema/tech_data_schema.yaml"
 
 
 def get_data_files(file_list):
@@ -19,33 +22,51 @@ def get_data_files(file_list):
 
 if __name__ == "__main__":
     # data_files = [f for f in listdir(data_path) if f != ".DS_Store" and "_s" not in f]
+    agent = None
+    replay_buffer = None
+    iterations = 100000
     print(data_files)
-    agent = DQNAgent()
 
-    cerebro = RLCerebro()
+    for i in range(iterations):
+        print("Iterator for " + str(i))
+        cerebro = RLCerebro()
 
-    # Add a agent
-    cerebro.addagent(agent)
+        # Add a strategy
+        cerebro.addstrategy(RLCommonStrategy)
 
-    # Add a strategy
-    cerebro.addstrategy(RLCommonStrategy)
+        if agent is not None and replay_buffer is not None:
+            cerebro.set_agent(agent)
+            cerebro.set_replay_buffer(replay_buffer)
 
-    # Create a Data Feed
-    data = BTCSVBasicData(
-        dataname=data_files,
-        reverse=False)
+        data = BTCSVTechData(
+            dataname=data_files,
+            reverse=False
+        )
 
-    # Add the Data Feed to Cerebro
-    cerebro.adddata(data)
+        scaled_data = BTCSVTechData(
+            dataname=scaled_data_files,
+            reverse=False
+        )
 
-    # Set the commission - 0.1% ... divide by 100 to remove the %
-    cerebro.broker.setcommission(commission=0.001)
+        # Add data feed to cerebo
+        cerebro.adddata(data)
+        cerebro.adddata(scaled_data, name="scaled_data")
 
-    # Set our desired cash start
-    cerebro.broker.setcash(100000.0)
-    print("Starting Portfolio Value: %.2f" % cerebro.broker.getvalue())
+        # Add sizer
+        cerebro.addsizer(PercentSizer)
 
-    cerebro.run()
+        # Set the commission - 0.1% ... divide by 100 to remove the %
+        cerebro.broker.setcommission(commission=0.001)
 
-    final_portfolio = round(cerebro.broker.getvalue(), 2)
-    print("Final Portfolio Value: " + str(final_portfolio))
+        # Set our desired cash start
+        cerebro.broker.set_cash(100000.0)
+        print("Starting portfolio value: %.2f" % cerebro.broker.getvalue())
+
+        cerebro.run()
+
+        final_portfolio = round(cerebro.broker.getvalue(), 2)
+        print("Final portfolio value: %.2f" % cerebro.broker.getvalue())
+
+        # cerebro.plot()
+        agent = cerebro.get_agent()
+        replay_buffer = cerebro.get_replay_buffer()

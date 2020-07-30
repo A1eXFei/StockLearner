@@ -8,15 +8,19 @@ class RLCerebro(bt.Cerebro):
     def __init__(self):
         super(RLCerebro, self).__init__()
         self._agent = None
+        self._replay_buffer = None
 
-    def addagent(self, agent):
-        self._agent = agent
+    def get_replay_buffer(self):
+        return self._replay_buffer
 
-    def getagent(self):
+    def set_replay_buffer(self, replay_buffer):
+        self._replay_buffer = replay_buffer
+
+    def get_agent(self):
         return self._agent
 
-    def run(self):
-        if self._agent is None:
-            raise ValueError
+    def set_agent(self, agent):
+        self._agent = agent
 
+    def run(self):
         bt.Cerebro.run(self)
