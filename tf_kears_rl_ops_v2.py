@@ -4,11 +4,12 @@ from os.path import join
 from feed.bt_data import *
 from rl.v2.bt_ext.cerebro_ext import RLCerebro
 from rl.v2.bt_ext.sizer_ext import PercentSizer
-from rl.v2.bt_ext.strategy_ext2 import RLCommonStrategy
+# from rl.v2.bt_ext.strategy_ext2 import RLCommonStrategy
+from rl.v2.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
 
-data_path = "./test_data/stock/basic"
-data_files = "./test_data/stock/basic/000002.csv"
-scaled_data_path = "./test_data/stock/basic"
+data_path = "./test_data/stock/tech"
+data_files = "./test_data/stock/tech/000002.csv"
+scaled_data_path = "./test_data/stock/tech"
 scaled_data_files = "./test_data/stock/tech/000002_s.csv"
 data_schema = "./config_file/schema/tech_data_schema.yaml"
 
