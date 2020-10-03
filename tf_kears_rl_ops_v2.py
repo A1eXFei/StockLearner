@@ -2,10 +2,11 @@ import random
 from os.path import join
 
 from feed.bt_data import *
-from rl.v2.bt_ext.cerebro_ext import RLCerebro
-from rl.v2.bt_ext.sizer_ext import PercentSizer
-# from rl.v2.bt_ext.strategy_ext2 import RLCommonStrategy
-from rl.v2.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
+from rl.common_bt_ext.cerebro_ext import RLCerebro
+from rl.common_bt_ext.sizer_ext import PercentSizer
+from rl.pytorch.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
+
+# from rl.v2.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
 
 data_path = "./test_data/stock/tech"
 data_files = "./test_data/stock/tech/000002.csv"

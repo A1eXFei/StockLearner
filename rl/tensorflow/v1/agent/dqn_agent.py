@@ -5,9 +5,9 @@ import random
 import numpy as np
 import tensorflow as tf
 
-from rl.v1.agent import RLBaseAgent
-from rl.v1.dqn.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
-from rl.v1.ops import clipped_error
+from rl.tensorflow.v1.agent import RLBaseAgent
+from rl.tensorflow.v1.dqn import ReplayBuffer, PrioritizedReplayBuffer
+from rl.tensorflow.v1.ops import clipped_error
 from util import model_util
 
 

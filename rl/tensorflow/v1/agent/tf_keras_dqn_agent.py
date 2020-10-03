@@ -5,8 +5,8 @@ import numpy as np
 import tensorflow as tf
 
 from keras.model.tree_model_builder import TreeModelBuilder
-from rl.v1.agent import RLBaseAgent
-from rl.v1.dqn.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+from rl.tensorflow.v1.agent import RLBaseAgent
+from rl.tensorflow.v1.dqn import ReplayBuffer, PrioritizedReplayBuffer
 
 
 class DQNAgent(RLBaseAgent):
