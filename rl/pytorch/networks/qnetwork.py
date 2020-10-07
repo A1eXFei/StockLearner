@@ -3,9 +3,9 @@ import torch.nn.functional as F
 
 
 class QNetwork(nn.Module):
-    def __init__(self, input, fc_layer_params, outputs):
+    def __init__(self, inputs, fc_layer_params, outputs):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input, 128)
+        self.fc1 = nn.Linear(inputs, 128)
         self.fc2 = nn.Linear(128, 256)
         self.fc3 = nn.Linear(256, 512)
         self.fc4 = nn.Linear(512, 256)

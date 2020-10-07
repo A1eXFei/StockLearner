@@ -1,18 +1,21 @@
 import random
+import logging
+from logging.config import fileConfig
 from os.path import join
-
 from feed.bt_data import *
 from rl.common_bt_ext.cerebro_ext import RLCerebro
 from rl.common_bt_ext.sizer_ext import PercentSizer
-from rl.pytorch.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
-
-# from rl.v2.bt_ext.strategy_ext2_pytorch import RLCommonStrategy
+from rl.pytorch.bt_ext.strategy_ext2 import RLCommonStrategy
+# from rl.tensorflow.v2.bt_ext.strategy_ext2 import RLCommonStrategy
 
 data_path = "./test_data/stock/tech"
 data_files = "./test_data/stock/tech/000002.csv"
 scaled_data_path = "./test_data/stock/tech"
 scaled_data_files = "./test_data/stock/tech/000002_s.csv"
 data_schema = "./config_file/schema/tech_data_schema.yaml"
+
+fileConfig("./config_file/logging_config.ini")
+logger = logging.getLogger("sLogger")
 
 
 def get_data_files(file_list):
@@ -27,10 +30,12 @@ if __name__ == "__main__":
     agent = None
     replay_buffer = None
     iterations = 100000
-    print(data_files)
+    logger.debug(data_files)
+    # print(data_files)
 
     for i in range(iterations):
-        print("Iterator for " + str(i))
+        # print("Iterator for " + str(i))
+        logger.info("Iterator for " + str(i))
         cerebro = RLCerebro()
 
         # Add a strategy
@@ -62,12 +67,14 @@ if __name__ == "__main__":
 
         # Set our desired cash start
         cerebro.broker.set_cash(100000.0)
-        print("Starting portfolio value: %.2f" % cerebro.broker.getvalue())
+        # print("Starting portfolio value: %.2f" % cerebro.broker.getvalue())
+        logger.info("Starting portfolio value: %.2f" % cerebro.broker.getvalue())
 
         cerebro.run()
 
         final_portfolio = round(cerebro.broker.getvalue(), 2)
-        print("Final portfolio value: %.2f" % cerebro.broker.getvalue())
+        # print("Final portfolio value: %.2f" % cerebro.broker.getvalue())
+        logger.info("Final portfolio value: %.2f" % cerebro.broker.getvalue())
 
         # cerebro.plot()
         agent = cerebro.get_agent()

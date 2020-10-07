@@ -5,9 +5,10 @@ from os.path import join
 import yaml
 
 from feed.bt_data import BTCSVBasicData
-from rl.tensorflow.v1.agent import DQNAgent
-from rl.tensorflow.v1.env import PercentSizer
+from rl.tensorflow.v1.agent.dqn_agent import DQNAgent
+from rl.tensorflow.v1.env.sizer_ext import PercentSizer
 from rl.tensorflow.v1.env.cerebro_ext import RLExtCerebro
+from rl.tensorflow.v1.agent.base import RLCommonStrategy
 
 APP_CONFIG_FILE_PATH = "./config_file/train/tf_keras_rl_ops.yaml"
 

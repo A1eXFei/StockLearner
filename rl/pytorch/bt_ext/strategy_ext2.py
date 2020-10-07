@@ -1,30 +1,23 @@
 # -* coding: UTF-8 -*-
 from queue import Queue
-
+import logging
 import backtrader as bt
 import numpy as np
 import torch
-
+from logging.config import fileConfig
 from rl.pytorch.agents.dqn import DQNAgent
 from rl.pytorch.agents.replay_buffer import ReplayBuffer
 from rl.pytorch.networks.qnetwork import QNetwork
 
+fileConfig("./config_file/logging_config.ini")
+logger = logging.getLogger("sLogger")
+
 
 class RLCommonStrategy(bt.Strategy):
-    params = (
-        ("printlog", False),
-    )
-
-    def log(self, txt, dt=None, doprint=False):
-        """ Logging function fot this strategy"""
-        if self.params.printlog or doprint:
-            dt = dt or self.datas[0].datetime.date(0)
-            print("%s, %s" % (dt.isoformat(), txt))
-
     def __init__(self):
         self.train_interval = 50
         self.update_interval = 100
-        self.log("init strategy", doprint=False)
+        logger.debug("init strategy")
         self.min_time_step = 5
         self.time_step = 1
         self.dataclose = self.datas[0].close
@@ -37,7 +30,6 @@ class RLCommonStrategy(bt.Strategy):
         self.first_date = None
         self.last_date = None
 
-        t = self.datas[0]
         self.feature_columns = []
         feature_columns = self.datas[0].columns[1:-1]
         for feature in feature_columns:
@@ -80,31 +72,30 @@ class RLCommonStrategy(bt.Strategy):
             self.replay_buffer = self.env.get_replay_buffer()
 
     def start(self):
-        self.log("Start -> info", doprint=False)
         self.last_date = self.datas[0].datetime.date(0).strftime("%Y-%m-%d")
         self.first_date = self.datas[0].datetime.date(self.min_time_step).strftime("%Y-%m-%d")
-        self.log("Start -> last date: " + self.last_date, doprint=False)
-        self.log("Start -> first date: " + self.first_date, doprint=False)
+        logger.debug("Start -> last date: " + self.last_date)
+        logger.debug("Start -> first date: " + self.first_date)
 
     def prenext_open(self):
-        self.log("prenext_open -> info", doprint=False)
+        logger.debug("prenext_open -> info")
 
     def next_open(self):
-        self.log("next_open -> info", doprint=False)
+        logger.debug("next_open -> info")
 
     def nextstart_open(self):
-        self.log("nextstart_open -> info", doprint=False)
+        logger.debug("nextstart_open -> info")
 
     def close(self, data=None, size=None, **kwargs):
-        self.log("close -> info", doprint=False)
+        logger.debug("close -> info")
 
     def stop(self):
-        self.log("stop -> info", doprint=False)
+        logger.debug("stop -> info")
         self.env.set_agent(self.agent)
         self.env.set_replay_buffer(self.replay_buffer)
 
     def notify_order(self, order):
-        self.log("notify_order " + str(order.status), doprint=False)
+        logger.debug("notify_order " + str(order.status))
         if order.status in [order.Submitted, order.Accepted]:
             # Buy/Sell order submitted/accepted to/by broker - Nothing to do
             return
@@ -113,26 +104,25 @@ class RLCommonStrategy(bt.Strategy):
         # Attention: broker could reject order if not enough cash
         if order.status in [order.Completed]:
             if order.isbuy():
-                self.log(
+                logger.debug(
                     "BUY EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f" %
                     (order.executed.price,
                      order.executed.value,
-                     order.executed.comm),
-                    doprint=False)
+                     order.executed.comm))
 
                 self.buyprice = order.executed.price
                 self.buycomm = order.executed.comm
             else:  # Sell
-                self.log("SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f" %
-                         (order.executed.price,
-                          order.executed.value,
-                          order.executed.comm),
-                         doprint=False)
+                logger.debug(
+                    "SELL EXECUTED, Price: %.2f, Cost: %.2f, Comm %.2f" %
+                    (order.executed.price,
+                     order.executed.value,
+                     order.executed.comm))
 
             self.bar_executed = len(self)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log("Order Canceled/Margin/Rejected", doprint=False)
+            logger.debug("Order Canceled/Margin/Rejected")
 
         # Write down: no pending order
         self.order = None
@@ -146,12 +136,12 @@ class RLCommonStrategy(bt.Strategy):
         else:
             last_value = self.value_queue.get()
 
-        self.log("_get_reward -> last_value: " + str(last_value), doprint=False)
-        self.log("_get_reward -> current_value: " + str(current_value), doprint=False)
+        logger.debug("_get_reward -> last_value: " + str(last_value))
+        logger.debug("_get_reward -> current_value: " + str(current_value))
 
         if last_value != 0.0:
             reward = round((current_value - last_value) / last_value * 100, 2)
-        self.log("_get_reward -> reward: " + str(reward), doprint=False)
+        logger.debug("_get_reward -> reward: " + str(reward))
         return reward
 
     def get_state(self, date):
@@ -170,21 +160,21 @@ class RLCommonStrategy(bt.Strategy):
     # As bt_ext.render(), but need to get observation and reward
     def next(self):
         # Simply log the closing price of the series from the reference
-        self.log("next -> Close, %.2f" % self.dataclose[0], doprint=False)
-        self.log("next -> Broker value: " + str(round(self.broker.getvalue(), 2)) + ", cash: " + str(
-            round(self.broker.get_cash(), 2)), doprint=False)
-        self.log("next -> Position size: " + str(self.position.size) + ", price: " + str(round(self.position.price, 2)),
-                 doprint=False)
+        logger.debug("next -> Close, %.2f" % self.dataclose[0])
+        logger.debug("next -> Broker value: " + str(round(self.broker.getvalue(), 2))
+                     + ", cash: " + str(round(self.broker.get_cash(), 2)))
+        logger.debug("next -> Position size: " + str(self.position.size)
+                     + ", price: " + str(round(self.position.price, 2)))
         self.date = self.datas[0].datetime.date(0).strftime("%Y-%m-%d")
 
         # Skip for time steps
         if self.time_step < self.min_time_step:
             self.time_step = self.time_step + 1
-            self.log("next -> Skip for processing", doprint=False)
+            logger.debug("next -> Skip for processing")
             return
         elif self.time_step == self.min_time_step:
             self.time_step = self.time_step + 1
-            self.log("next -> last time step", doprint=False)
+            logger.debug("next -> last time step")
             return
 
         self.last_state = self.current_state
@@ -201,14 +191,14 @@ class RLCommonStrategy(bt.Strategy):
             pass
         elif self.action.item() == 1:
             # BUY, BUY, BUY!!! (with all possible default parameters)
-            self.log("BUY CREATE, %.2f" % self.dataclose[0], doprint=False)
+            logger.debug("BUY CREATE, %.2f" % self.dataclose[0])
             # Keep track of the created order to avoid a 2nd order
             self.order = self.buy()
 
         elif self.action.item() == 2 and self.position:
             # We must in the market before we can sell
             # SELL, SELL, SELL!!! (with all possible default parameters)
-            self.log("SELL CREATE, %.2f" % self.dataclose[0], doprint=False)
+            logger.debug("SELL CREATE, %.2f" % self.dataclose[0])
             # Keep track of the created order to avoid a 2nd order
             self.order = self.sell()
 
