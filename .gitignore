@@ -46,3 +46,4 @@ model/mlp/stock_baseline/ckp/checkpoint
 main.log
 
 *.log
+.idea/stocklearner.iml
