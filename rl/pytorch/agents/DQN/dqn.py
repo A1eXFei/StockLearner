@@ -1,12 +1,13 @@
 import torch
 import math
 import random
-from torch import optim
 import torch.nn.functional as F
+from torch import optim
+from rl.pytorch.agents.base_agent import BaseAgent
 from rl.pytorch.agents.replay_buffer import Transition
 
 
-class DQNAgent:
+class DQNAgent(BaseAgent):
     def __init__(self, n_actions, q_network, replay_buffer, batch_size=128,
                  eps_start=0.9, eps_end=0.05, eps_decay=200, gamma=1.0):
         # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

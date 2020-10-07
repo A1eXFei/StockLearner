@@ -5,7 +5,7 @@ import backtrader as bt
 import numpy as np
 import torch
 from logging.config import fileConfig
-from rl.pytorch.agents.dqn import DQNAgent
+from rl.pytorch.agents.DQN.dqn import DQNAgent
 from rl.pytorch.agents.replay_buffer import ReplayBuffer
 from rl.pytorch.networks.qnetwork import QNetwork
 
