@@ -1,7 +1,7 @@
 anytree==2.6.0
 attrs==19.3.0
 backtrader==1.9.76.123
-cryptography==2.1.4
+cryptography==3.2
 numpy==1.16.2
 PyYAML==3.12
 scikit-learn==0.22
