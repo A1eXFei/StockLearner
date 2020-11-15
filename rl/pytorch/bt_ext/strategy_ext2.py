@@ -5,12 +5,14 @@ import backtrader as bt
 import numpy as np
 import torch
 from logging.config import fileConfig
-from rl.pytorch.agents.DQN.dqn import DQNAgent
-from rl.pytorch.agents.replay_buffer import ReplayBuffer
+from rl.pytorch.agents.DQN.dqn import DQN, DDQN
+from rl.pytorch.agents.replay_buffer import ReplayBuffer, PrioritisedReplayBuffer
 from rl.pytorch.networks.qnetwork import QNetwork
 
 fileConfig("./config_file/logging_config.ini")
 logger = logging.getLogger("sLogger")
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 
 class RLCommonStrategy(bt.Strategy):
@@ -60,7 +62,7 @@ class RLCommonStrategy(bt.Strategy):
     def build_agent(self):
         if self.env.get_agent() is None:
             self.q_network = QNetwork(len(self.feature_columns), None, self.n_actions)
-            self.agent = DQNAgent(self.n_actions, self.q_network, self.replay_buffer)
+            self.agent = DDQN(self.n_actions, self.q_network, self.replay_buffer)
         else:
             self.agent = self.env.get_agent()
 
@@ -151,10 +153,10 @@ class RLCommonStrategy(bt.Strategy):
         for line in self.scaled_feature_columns:
             obv.append(line[0])
 
-        obv = torch.from_numpy(np.array([obv]))
-        obv = torch.tensor(obv, dtype=torch.float32)
-        reward = torch.from_numpy(np.array(reward))
-        reward = torch.tensor(reward, dtype=torch.float32)
+        obv = torch.from_numpy(np.array([obv])).to(dtype=torch.float32, device=device).detach()
+        # obv = torch.from_numpy(np.array([obv])).float().to(device=device).detach()
+        reward = torch.from_numpy(np.array(reward)).to(dtype=torch.float32, device=device).detach()
+        # reward = torch.from_numpy(np.array(reward)).float().to(device=device).detach()
         return obv, reward
 
     # As bt_ext.render(), but need to get observation and reward
@@ -185,7 +187,11 @@ class RLCommonStrategy(bt.Strategy):
         self.action = self.agent.select_action(self.current_state)
 
         if self.current_state is not None and self.last_state is not None and self.last_action is not None:
-            self.agent.memory.push(self.last_state, self.last_action, self.current_state, self.reward)
+            if isinstance(self.agent.memory, ReplayBuffer):
+                self.agent.memory.push(self.last_state, self.last_action, self.current_state, self.reward)
+            else:
+                # TODO: add TD_errors for PrioritisedReplayBuffer when push status
+                pass
 
         if self.action.item() == 0:
             pass
@@ -206,4 +212,4 @@ class RLCommonStrategy(bt.Strategy):
             self.agent.optimize_model()
 
         if self.agent.steps_done % self.update_interval == 0:
-            self.agent.target_net.load_state_dict(self.agent.policy_net.state_dict())
+            self.agent.update_target_network()

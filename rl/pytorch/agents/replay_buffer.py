@@ -23,3 +23,15 @@ class ReplayBuffer:
 
     def __len__(self):
         return len(self.memory)
+
+
+class PrioritisedReplayBuffer:
+    def __init__(self, capacity, seed=0):
+        self.capacity = capacity
+        self.seed = random.seed(seed)
+        self.memory = []
+        self.position = 0
+
+    # TODO:
+    def push(self, *args):
+        pass
