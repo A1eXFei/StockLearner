@@ -1,90 +1,144 @@
 import torch
-import math
-import random
 import torch.nn.functional as F
+import numpy as np
 from torch import optim
 from rl.pytorch.agents.base_agent import BaseAgent
-from rl.pytorch.agents.replay_buffer import Transition
+from rl.pytorch.exploration_strategy import EpsilonGreedyExploration
 
 
 class DQN(BaseAgent):
-    def __init__(self, n_actions, q_network, replay_buffer, batch_size=128,
-                 eps_start=0.9, eps_end=0.05, eps_decay=200, gamma=1.0, learning_rate=0.0001):
-        BaseAgent.__init__(self, n_actions, batch_size)
-        self.eps_start = eps_start
-        self.eps_end = eps_end
-        self.eps_decay = eps_decay
-        self.gamma = gamma
+    """A deep Q learning agent"""
+    agent_name = "DQN"
+
+    def __init__(self, network, acton_size, state_size, batch_size, replay_buffer, learning_rate, discount_rate,
+                 exploration_cycle_episodes_length, random_episodes_to_run, epsilon_decay_rate_denominator,
+                 gradient_clipping_norm, seed, score_required_to_win, visualise_individual_results, debug_mode, device):
+        BaseAgent.__init__(self, seed, acton_size, state_size, score_required_to_win, batch_size,
+                           visualise_individual_results, debug_mode, device)
         self.learning_rate = learning_rate
-        self.steps_done = 0
-        self.memory = replay_buffer
-        self.policy_net = q_network
-        self.target_net = q_network
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()
-        self.optimizer = optim.Adam(self.policy_net.parameters(), self.learning_rate)
+        self.discount_rate = discount_rate
+        self.gradient_clipping_norm = gradient_clipping_norm
+        self.memory = replay_buffer # ReplayBuffer(buffer_size, batch_size, seed)
+        self.q_network_local = network
+        self.q_network_optimizer = optim.Adam(self.q_network_local.parameters(),
+                                              lr=self.learning_rate, eps=1e-4)
+        self.exploration_strategy = EpsilonGreedyExploration(exploration_cycle_episodes_length,
+                                                             random_episodes_to_run,
+                                                             epsilon_decay_rate_denominator)
+
+    def reset_game(self):
+        super(DQN, self).reset_game()
+        self.update_learning_rate(self.learning_rate, self.q_network_optimizer)
 
     def select_action(self, state):
-        sample = random.random()
-        eps_threshold = self.eps_end + (self.eps_start - self.eps_end) * math.exp(
-            -1. * self.steps_done / self.eps_decay)
-        self.steps_done += 1
-
-        if sample > eps_threshold:
-            with torch.no_grad():
-                return self.policy_net(state).max(1)[1].view(1, 1)
-        else:
-            return torch.tensor([[random.randrange(self.n_actions)]], device=self.device, dtype=torch.long)
-
-    def optimize_model(self):
-        if len(self.memory) < self.batch_size:
+        """Uses the local Q network and an epsilon greedy policy to pick an action"""
+        # PyTorch only accepts mini-batches and not single observations so we have to use unsqueeze to add
+        # a "fake" dimension to make it a mini-batch rather than a single observation
+        if state is None:
             return
-        transitions = self.memory.sample(self.batch_size)
-        batch = Transition(*zip(*transitions))
 
-        state_batch = torch.cat(batch.state)
-        action_batch = torch.cat(batch.action)
-        reward_batch = torch.cat(batch.reward)
+        if isinstance(state, np.int64) or isinstance(state, int):
+            state = np.array([state])
 
-        state_action_values = self.compute_state_action_values(state_batch, action_batch)
-        expected_state_action_values = self.compute_expected_state_action_values(batch, reward_batch)
-        loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
-        self.take_optimisation_step(self.optimizer, loss, self.policy_net)
+        state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        if len(state.shape) < 2:
+            state = state.unsqueeze(0)
+        # puts network in evaluation mode
+        self.q_network_local.eval()
+        with torch.no_grad():
+            action_values = self.q_network_local(state)
 
-    def compute_state_action_values(self, state_batch, action_batch):
-        state_action_values = self.policy_net(state_batch).gather(1, action_batch)
-        return state_action_values
+        # puts network back in training mode
+        self.q_network_local.train()
+        action = self.exploration_strategy.perturb_action_for_exploration_purposes({"action_values": action_values,
+                                                                                    "turn_off_exploration": self.turn_off_exploration,                                                                           "episode_number": self.episode_number})
+        self.logger.debug("Q values {} -- Action chosen {}".format(action_values, action))
+        self.steps_done = self.steps_done + 1
+        return action
 
-    def compute_expected_state_action_values(self, batch, reward_batch):
-        non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
-                                                batch.next_state)), device=self.device, dtype=torch.bool)
-        non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
+    def learn(self, experiences=None):
+        """Runs a learning iteration for the Q network"""
+        if experiences is None:
+            states, actions, rewards, next_states, dones = self.sample_experiences()
+        else:
+            states, actions, rewards, next_states, dones = experiences
+        loss = self.compute_loss(states, next_states, rewards, actions, dones)
 
-        next_state_values = self.compute_next_state_action_values(non_final_mask, non_final_next_states)
-        expected_state_action_values = (next_state_values * self.gamma) + reward_batch
+        # self.logger.info("Action counts {}".format(Counter(actions_list)))
+        self.take_optimisation_step(self.q_network_optimizer, self.q_network_local, loss, self.gradient_clipping_norm)
 
-        return expected_state_action_values
+    def compute_loss(self, states, next_states, rewards, actions, dones):
+        """Computes the loss required to train the Q network"""
+        with torch.no_grad():
+            Q_targets = self.compute_q_targets(next_states, rewards, dones)
+        Q_expected = self.compute_expected_q_values(states, actions)
+        loss = F.mse_loss(Q_expected, Q_targets)
+        return loss
 
-    def compute_next_state_action_values(self, non_final_mask, non_final_next_states):
-        next_state_values = torch.zeros(self.batch_size, device=self.device)
-        next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0].detach()
-        return next_state_values
+    def compute_q_targets(self, next_states, rewards, dones):
+        """Computes the q_targets we will compare to predicted q values to create the loss to train the Q network"""
+        Q_targets_next = self.compute_q_values_for_next_states(next_states)
+        Q_targets = self.compute_q_values_for_current_states(rewards, Q_targets_next, dones)
+        return Q_targets
 
-    def update_target_network(self):
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+    def compute_q_values_for_next_states(self, next_states):
+        """Computes the q_values for next state we will use to create the loss to train the Q network"""
+        Q_targets_next = self.q_network_local(next_states).detach().max(1)[0].unsqueeze(1)
+        return Q_targets_next
+
+    def compute_q_values_for_current_states(self, rewards, Q_targets_next, dones):
+        """Computes the q_values for current state we will use to create the loss to train the Q network"""
+        Q_targets_current = rewards + (self.discount_rate * Q_targets_next * (1 - dones))
+        return Q_targets_current
+
+    def compute_expected_q_values(self, states, actions):
+        """Computes the expected q_values we will use to create the loss to train the Q network"""
+        # must convert actions to long so can be used as index
+        Q_expected = self.q_network_local(states).gather(1, actions.long())
+        return Q_expected
+
+    def locally_save_policy(self):
+        """Saves the policy"""
+        torch.save(self.q_network_local.state_dict(), "Models/{}_local_network.pt".format(self.agent_name))
+
+    def time_for_q_network_to_learn(self):
+        """Returns boolean indicating whether enough steps have been taken for learning to begin and there are
+        enough experiences in the replay buffer to learn from"""
+        return self.right_amount_of_steps_taken() and self.enough_experiences_to_learn_from()
+
+    def right_amount_of_steps_taken(self, global_step_number, update_every_n_steps):
+        """Returns boolean indicating whether enough steps have been taken for learning to begin"""
+        return global_step_number % update_every_n_steps == 0
+
+    def sample_experiences(self):
+        """Draws a random sample of experience from the memory buffer"""
+        experiences = self.memory.sample()
+        states, actions, rewards, next_states, dones = experiences
+        return states, actions, rewards, next_states, dones
 
 
-class DDQN(DQN):
-    def __init__(self, n_actions, q_network, replay_buffer):
-        DQN.__init__(self, n_actions, q_network, replay_buffer)
+class DQNWithFixedQTargets(DQN):
+    """A DQN agent that uses an older version of the q_network as the target network"""
+    agent_name = "DQN with Fixed Q Targets"
 
-    def compute_next_state_action_values(self, non_final_mask, non_final_next_states):
-        next_state_values = torch.zeros(self.batch_size, device=self.device)
-        max_action_indexes = self.policy_net(non_final_next_states).detach().argmax(1)
-        # print("=====")
-        # print(next_state_values.shape)
-        # print(max_action_indexes.shape)
-        # print(self.target_net(non_final_next_states).shape)
-        # print(self.target_net(non_final_next_states).max(1)[0].detach().shape)
-        next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0].detach().gather(0, max_action_indexes)
-        return next_state_values
+    def __init__(self, network, acton_size, state_size, batch_size, replay_buffer, learning_rate, discount_rate, tau,
+                 exploration_cycle_episodes_length, random_episodes_to_run, epsilon_decay_rate_denominator,
+                 gradient_clipping_norm, seed, score_required_to_win, visualise_individual_results, debug_mode, device):
+        DQN.__init__(self, network, acton_size, state_size, batch_size, replay_buffer, learning_rate, discount_rate,
+                     exploration_cycle_episodes_length, random_episodes_to_run, epsilon_decay_rate_denominator,
+                     gradient_clipping_norm, seed, score_required_to_win, visualise_individual_results,
+                     debug_mode, device)
+        self.tau = tau
+        self.q_network_target = network
+        BaseAgent.copy_model_over(from_model=self.q_network_local, to_model=self.q_network_target)
+
+    def learn(self, experiences=None):
+        """Runs a learning iteration for the Q network"""
+        super(DQNWithFixedQTargets, self).learn(experiences=experiences)
+        self.soft_update_of_target_network(self.q_network_local, self.q_network_target,
+                                           self.tau)  # Update the target network
+
+    def compute_q_values_for_next_states(self, next_states):
+        """Computes the q_values for next state we will use to create the loss to train the Q network"""
+        Q_targets_next = self.q_network_target(next_states).detach().max(1)[0].unsqueeze(1)
+        return Q_targets_next

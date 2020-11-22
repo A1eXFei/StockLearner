@@ -5,7 +5,7 @@ import backtrader as bt
 import numpy as np
 import torch
 from logging.config import fileConfig
-from rl.pytorch.agents.DQN.dqn import DQN, DDQN
+from rl.pytorch.agents.DQN.dqn import DQN, DQNWithFixedQTargets
 from rl.pytorch.agents.replay_buffer import ReplayBuffer, PrioritisedReplayBuffer
 from rl.pytorch.networks.qnetwork import QNetwork
 
@@ -44,7 +44,8 @@ class RLCommonStrategy(bt.Strategy):
 
         self.value_queue = Queue(maxsize=2)
         self.n_actions = 3
-
+        self.n_states = len(scaled_feature_columns)
+        # print(self.n_states)
         self.current_state = None
         self.last_state = None
         self.action = 0
@@ -52,9 +53,23 @@ class RLCommonStrategy(bt.Strategy):
 
         self.reward = 0.0
 
+        self.batch_size = 32
+        self.learning_rate = 0.001
+        self.discount_rate = 0.99
+        self.gradient_clipping_norm = 0.5
+        self.random_episodes_to_run = 0
+        self.tau = 0.1
+        self.exploration_cycle_episodes_length = 100000
+        self.epsilon_decay_rate_denominator = 1
+
         self.q_network = None
         self.agent = None
         self.replay_buffer = None
+        self.seed = 1
+
+        self.score_required_to_win = self.broker.getvalue() * 5
+        self.visualise_individual_results = None
+        self.debug_mode = False
 
         self.build_replay_buffer()
         self.build_agent()
@@ -62,14 +77,25 @@ class RLCommonStrategy(bt.Strategy):
     def build_agent(self):
         if self.env.get_agent() is None:
             self.q_network = QNetwork(len(self.feature_columns), None, self.n_actions)
-            self.agent = DDQN(self.n_actions, self.q_network, self.replay_buffer)
+            # self.agent = DQN(self.q_network, self.n_actions, self.n_states, self.batch_size, self.replay_buffer,
+            #                  self.learning_rate, self.discount_rate, self.exploration_cycle_episodes_length,
+            #                  self.random_episodes_to_run, self.epsilon_decay_rate_denominator,
+            #                  self.gradient_clipping_norm, self.seed,
+            #                  self.score_required_to_win, self.visualise_individual_results, self.debug_mode, device)
+            self.agent = DQNWithFixedQTargets(self.q_network, self.n_actions, self.n_states, self.batch_size,
+                                              self.replay_buffer, self.learning_rate, self.discount_rate, self.tau,
+                                              self.exploration_cycle_episodes_length,
+                                              self.random_episodes_to_run, self.epsilon_decay_rate_denominator,
+                                              self.gradient_clipping_norm, self.seed,
+                                              self.score_required_to_win, self.visualise_individual_results,
+                                              self.debug_mode, device)
         else:
             self.agent = self.env.get_agent()
 
     def build_replay_buffer(self):
         replay_buffer_capacity = 500
         if self.env.get_replay_buffer() is None:
-            self.replay_buffer = ReplayBuffer(replay_buffer_capacity)
+            self.replay_buffer = ReplayBuffer(replay_buffer_capacity, self.batch_size, self.seed, device)
         else:
             self.replay_buffer = self.env.get_replay_buffer()
 
@@ -153,11 +179,17 @@ class RLCommonStrategy(bt.Strategy):
         for line in self.scaled_feature_columns:
             obv.append(line[0])
 
-        obv = torch.from_numpy(np.array([obv])).to(dtype=torch.float32, device=device).detach()
+        obv = np.array(obv)
+
+        if date == self.last_date:
+            dones = True
+        else:
+            dones = False
+        # obv = torch.from_numpy(np.array([obv])).to(dtype=torch.float32, device=device).detach()
         # obv = torch.from_numpy(np.array([obv])).float().to(device=device).detach()
-        reward = torch.from_numpy(np.array(reward)).to(dtype=torch.float32, device=device).detach()
+        # reward = torch.from_numpy(np.array(reward)).to(dtype=torch.float32, device=device).detach()
         # reward = torch.from_numpy(np.array(reward)).float().to(device=device).detach()
-        return obv, reward
+        return obv, reward, dones
 
     # As bt_ext.render(), but need to get observation and reward
     def next(self):
@@ -182,26 +214,27 @@ class RLCommonStrategy(bt.Strategy):
         self.last_state = self.current_state
         self.last_action = self.action
 
-        self.current_state, self.reward = self.get_state(self.date)
+        self.current_state, self.reward, self.dones = self.get_state(self.date)
         self.value_queue.put(round(self.broker.getvalue(), 2), False)
         self.action = self.agent.select_action(self.current_state)
 
         if self.current_state is not None and self.last_state is not None and self.last_action is not None:
             if isinstance(self.agent.memory, ReplayBuffer):
-                self.agent.memory.push(self.last_state, self.last_action, self.current_state, self.reward)
+                self.agent.memory.add_experience(self.last_state, self.last_action,
+                                                 self.reward, self.current_state, self.dones)
             else:
                 # TODO: add TD_errors for PrioritisedReplayBuffer when push status
                 pass
 
-        if self.action.item() == 0:
+        if self.action == 0:
             pass
-        elif self.action.item() == 1:
+        elif self.action == 1:
             # BUY, BUY, BUY!!! (with all possible default parameters)
             logger.debug("BUY CREATE, %.2f" % self.dataclose[0])
             # Keep track of the created order to avoid a 2nd order
             self.order = self.buy()
 
-        elif self.action.item() == 2 and self.position:
+        elif self.action == 2 and self.position:
             # We must in the market before we can sell
             # SELL, SELL, SELL!!! (with all possible default parameters)
             logger.debug("SELL CREATE, %.2f" % self.dataclose[0])
@@ -209,7 +242,8 @@ class RLCommonStrategy(bt.Strategy):
             self.order = self.sell()
 
         if self.agent.steps_done % self.train_interval == 0:
-            self.agent.optimize_model()
+            self.agent.learn()
 
         if self.agent.steps_done % self.update_interval == 0:
-            self.agent.update_target_network()
+            if not isinstance(self.agent, DQN):
+                self.agent.update_target_network()
